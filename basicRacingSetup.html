@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Racing Game</title>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Orbitron', sans-serif;
+            background-color: #1a1a1a;
+            color: #e0e0e0;
+            overflow: hidden;
+        }
+        canvas {
+            background-color: #333;
+            cursor: none;
+        }
+        .game-container {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            width: 100vw;
+            height: 100vh;
+        }
+        .ui-panel {
+            background-color: rgba(0, 0, 0, 0.7);
+            border: 2px solid #4f4f4f;
+            backdrop-filter: blur(5px);
+        }
+        .btn {
+            transition: all 0.3s ease;
+        }
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0, 255, 255, 0.3);
+        }
+        #message-box {
+            transition: opacity 0.5s, transform 0.5s;
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-white flex flex-col items-center justify-center min-h-screen p-4">
+
+    <div id="title-screen" class="text-center">
+        <h1 class="text-6xl font-bold text-cyan-400 mb-4" style="text-shadow: 0 0 15px rgba(0,255,255,0.7);">AI RACER</h1>
+        <p class="text-xl mb-8">Select a track to begin</p>
+        <div id="map-selection" class="flex justify-center gap-4">
+            <button data-map="1" class="map-btn btn bg-gray-800 border-2 border-cyan-500 text-cyan-400 font-bold py-3 px-6 rounded-lg text-lg">Track 1: Oval</button>
+            <button data-map="2" class="map-btn btn bg-gray-800 border-2 border-cyan-500 text-cyan-400 font-bold py-3 px-6 rounded-lg text-lg">Track 2: Serpentine</button>
+            <button data-map="3" class="map-btn btn bg-gray-800 border-2 border-cyan-500 text-cyan-400 font-bold py-3 px-6 rounded-lg text-lg">Track 3: The Maze</button>
+        </div>
+    </div>
+
+    <div id="game-container" class="hidden w-full h-full flex-col items-center justify-center">
+        <canvas id="gameCanvas"></canvas>
+        <!-- This panel is where future Twitch overlay data could be displayed -->
+        <div id="twitch-info-panel" class="ui-panel absolute top-4 left-4 p-4 rounded-lg text-lg">
+            <h2 class="font-bold text-cyan-400">Lap: <span id="lap-counter">1 / 3</span></h2>
+            <p>Time: <span id="time-counter">0.00</span></p>
+            <p>Progress: <span id="progress-counter">0%</span></p>
+        </div>
+         <!-- This panel is where future AI model selection could happen -->
+        <div id="ai-control-panel" class="ui-panel absolute top-4 right-4 p-4 rounded-lg text-lg">
+            <h2 class="font-bold text-red-400">AI STATUS</h2>
+            <p>Current Model: <span id="ai-model-name">Player Controlled</span></p>
+            <p>Confidence: <span id="ai-confidence">N/A</span></p>
+        </div>
+    </div>
+    
+    <div id="message-box" class="hidden absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 ui-panel p-8 rounded-xl text-center z-50">
+        <h2 id="message-title" class="text-4xl font-bold mb-4"></h2>
+        <p id="message-text" class="text-xl mb-6"></p>
+        <button id="message-button" class="btn bg-cyan-500 text-gray-900 font-bold py-2 px-6 rounded-lg">Continue</button>
+    </div>
+
+
+    <script>
+        // --- DOM ELEMENTS & GAME STATE ---
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+
+        const titleScreen = document.getElementById('title-screen');
+        const gameContainer = document.getElementById('game-container');
+        const mapButtons = document.querySelectorAll('.map-btn');
+        
+        const lapCounterEl = document.getElementById('lap-counter');
+        const timeCounterEl = document.getElementById('time-counter');
+        const progressCounterEl = document.getElementById('progress-counter');
+        
+        const messageBox = document.getElementById('message-box');
+        const messageTitle = document.getElementById('message-title');
+        const messageText = document.getElementById('message-text');
+        let messageButton = document.getElementById('message-button');
+
+        let gameState = 'menu'; // 'menu', 'playing', 'finished'
+        let gameLoopId;
+        let startTime = 0;
+        const TOTAL_LAPS = 3;
+        
+        // --- GAME CONFIGURATION ---
+        const TRACK_COLOR = '#6b7280'; // Gray
+        const GRASS_COLOR = '#166534'; // Dark Green
+        const START_FINISH_COLOR = '#fde047'; // Yellow-300
+        const CHECKPOINT_COLOR = 'rgba(253, 224, 71, 0.4)'; // Yellow-400 with alpha
+        const NEXT_CHECKPOINT_COLOR = 'rgba(253, 224, 71, 0.2)'; // More transparent for the +2 checkpoint
+        const CAR_COLOR = '#06b6d4'; // Cyan
+
+        let currentTrack;
+
+        // --- TRACK DEFINITION FUNCTION ---
+        function getTrackData(width, height) {
+            // Recalculated checkpoints to be larger and span the entire track width ("mud to grass")
+            return {
+                1: {
+                    name: "Oval",
+                    draw: () => {
+                        ctx.fillStyle = TRACK_COLOR;
+                        ctx.beginPath();
+                        ctx.ellipse(width / 2, height / 2, width * 0.4, height * 0.3, 0, 0, Math.PI * 2);
+                        ctx.fill();
+                        ctx.globalCompositeOperation = 'destination-out';
+                        ctx.beginPath();
+                        ctx.ellipse(width / 2, height / 2, width * 0.25, height * 0.15, 0, 0, Math.PI * 2);
+                        ctx.fill();
+                        ctx.globalCompositeOperation = 'source-over';
+                    },
+                    startPos: { x: width / 2, y: height * 0.725 },
+                    startAngle: -Math.PI / 2,
+                    checkpoints: [
+                        { x: width * 0.4, y: height * 0.7, w: width * 0.2, h: height * 0.2 }, // 0: Start/Finish
+                        { x: width * 0.1, y: height * 0.6, w: width * 0.3, h: height * 0.3 }, // 1: Bottom-left corner
+                        { x: width * 0.1, y: height * 0.35, w: width * 0.15, h: height * 0.3 }, // 2: Left
+                        { x: width * 0.1, y: height * 0.1, w: width * 0.3, h: height * 0.3 }, // 3: Top-left corner
+                        { x: width * 0.4, y: height * 0.1, w: width * 0.2, h: height * 0.2 }, // 4: Top
+                        { x: width * 0.6, y: height * 0.1, w: width * 0.3, h: height * 0.3 }, // 5: Top-right corner
+                        { x: width * 0.75, y: height * 0.35, w: width * 0.15, h: height * 0.3 }, // 6: Right
+                        { x: width * 0.6, y: height * 0.6, w: width * 0.3, h: height * 0.3 }, // 7: Bottom-right corner
+                    ]
+                },
+                2: {
+                    name: "Serpentine",
+                    draw: () => {
+                        ctx.fillStyle = TRACK_COLOR;
+                        ctx.beginPath();
+                        ctx.moveTo(0, height * 0.2);
+                        ctx.bezierCurveTo(width * 0.25, 0, width * 0.75, height * 0.5, width, height * 0.2);
+                        ctx.lineTo(width, height * 0.8);
+                        ctx.bezierCurveTo(width * 0.75, height, width * 0.25, height * 0.5, 0, height * 0.8);
+                        ctx.closePath();
+                        ctx.fill();
+                        ctx.globalCompositeOperation = 'destination-out';
+                        ctx.fillStyle = 'black';
+                        ctx.beginPath();
+                        ctx.moveTo(width * 0.1, height * 0.3);
+                        ctx.bezierCurveTo(width * 0.3, height*0.15, width * 0.7, height * 0.6, width*0.9, height * 0.3);
+                        ctx.lineTo(width*0.9, height * 0.7);
+                        ctx.bezierCurveTo(width * 0.7, height*0.85, width * 0.3, height * 0.4, width*0.1, height * 0.7);
+                        ctx.closePath();
+                        ctx.fill();
+                        ctx.globalCompositeOperation = 'source-over';
+                    },
+                    startPos: { x: width * 0.1, y: height * 0.5 },
+                    startAngle: 0,
+                    checkpoints: [
+                        { x: 0, y: height * 0.4, w: width * 0.15, h: height * 0.2 }, // 0: Start/Finish
+                        { x: width * 0.2, y: 0, w: width * 0.2, h: height * 0.3 },  // 1
+                        { x: width * 0.45, y: height * 0.15, w: width*0.1, h: height * 0.3 }, // 2
+                        { x: width * 0.7, y: 0, w: width * 0.2, h: height * 0.3 },  // 3
+                        { x: width * 0.85, y: height * 0.4, w: width * 0.15, h: height * 0.2 }, // 4
+                        { x: width * 0.7, y: height * 0.7, w: width * 0.2, h: height * 0.3 }, // 5
+                        { x: width * 0.45, y: height * 0.55, w: width*0.1, h: height * 0.3 }, // 6
+                        { x: width * 0.2, y: height * 0.7, w: width * 0.2, h: height * 0.3 }, // 7
+                    ]
+                },
+                3: {
+                    name: "The Maze",
+                    draw: () => {
+                        ctx.fillStyle = TRACK_COLOR;
+                        ctx.fillRect(width * 0.1, height * 0.1, width * 0.8, height * 0.8);
+                        ctx.globalCompositeOperation = 'destination-out';
+                        ctx.fillRect(width * 0.2, height * 0.2, width * 0.2, height * 0.6);
+                        ctx.fillRect(width * 0.6, height * 0.2, width * 0.2, height * 0.6);
+                        ctx.fillRect(width * 0.3, height * 0.4, width * 0.4, height * 0.2);
+                        ctx.globalCompositeOperation = 'source-over';
+                    },
+                    startPos: { x: width * 0.15, y: height * 0.5 },
+                    startAngle: 0,
+                    checkpoints: [
+                         { x: width * 0.1, y: height * 0.4, w: width * 0.1, h: height * 0.2 }, // Start
+                         { x: width * 0.1, y: height * 0.1, w: width * 0.2, h: height * 0.2 }, // Top-left corner
+                         { x: width * 0.3, y: height * 0.1, w: width * 0.4, h: height * 0.2 }, // Top straight
+                         { x: width * 0.7, y: height * 0.1, w: width * 0.2, h: height * 0.2 }, // Top-right corner
+                         { x: width * 0.7, y: height * 0.3, w: width * 0.2, h: height * 0.4 }, // Right straight
+                         { x: width * 0.7, y: height * 0.7, w: width * 0.2, h: height * 0.2 }, // Bottom-right corner
+                         { x: width * 0.3, y: height * 0.7, w: width * 0.4, h: height * 0.2 }, // Bottom straight
+                         { x: width * 0.1, y: height * 0.7, w: width * 0.2, h: height * 0.2 }, // Bottom-left corner
+                    ]
+                }
+            };
+        }
+
+        // --- CAR CLASS ---
+        class Car {
+            constructor(x, y, angle) {
+                this.x = x; this.y = y; this.angle = angle;
+                this.speed = 0; this.width = 15; this.height = 30;
+                this.acceleration = 0.1; this.maxSpeed = 5;
+                this.friction = 0.05; this.turnSpeed = 0.05;
+                this.controls = { forward: false, reverse: false, left: false, right: false };
+                this.collisionPoints = []; 
+                this.lap = 1; this.currentCheckpoint = 0;
+            }
+
+            update() {
+                if (this.controls.forward) this.speed += this.acceleration;
+                if (this.controls.reverse) this.speed -= this.acceleration / 2;
+                if (this.speed > this.maxSpeed) this.speed = this.maxSpeed;
+                if (this.speed < -this.maxSpeed / 2) this.speed = -this.maxSpeed / 2;
+                if (this.speed > 0) this.speed -= this.friction;
+                if (this.speed < 0) this.speed += this.friction;
+                if (Math.abs(this.speed) < this.friction) this.speed = 0;
+                if (this.speed !== 0) {
+                    const flip = this.speed > 0 ? 1 : -1;
+                    if (this.controls.left) this.angle -= this.turnSpeed * flip;
+                    if (this.controls.right) this.angle += this.turnSpeed * flip;
+                }
+                this.x += Math.sin(this.angle) * this.speed;
+                this.y -= Math.cos(this.angle) * this.speed;
+                this.updateCollisionPoints();
+            }
+            
+            updateCollisionPoints() {
+                const frontX = this.x + Math.sin(this.angle) * (this.height / 2);
+                const frontY = this.y - Math.cos(this.angle) * (this.height / 2);
+                this.collisionPoints = [{ x: frontX, y: frontY }];
+            }
+            
+            checkTrackCollision() {
+                for (const point of this.collisionPoints) {
+                    if(point.x <= 0 || point.x >= canvas.width || point.y <= 0 || point.y >= canvas.height) {
+                         this.handleOffTrack();
+                         return;
+                    }
+                    const pixelData = ctx.getImageData(Math.round(point.x), Math.round(point.y), 1, 1).data;
+                    if (pixelData[0] < 100 || pixelData[1] < 100 || pixelData[2] < 100) { this.handleOffTrack(); }
+                }
+            }
+
+            // Updated to allow skipping one checkpoint
+            checkCheckpoints() {
+                const checkpoints = currentTrack.checkpoints;
+                const totalCheckpoints = checkpoints.length;
+                
+                // Define the next two potential checkpoints
+                const nextCpIndex1 = (this.currentCheckpoint + 1) % totalCheckpoints;
+                const nextCpIndex2 = (this.currentCheckpoint + 2) % totalCheckpoints;
+                const nextCp1 = checkpoints[nextCpIndex1];
+                const nextCp2 = checkpoints[nextCpIndex2];
+
+                const carHitbox = { x: this.x - this.width/2, y: this.y - this.height/2, w: this.width, h: this.height };
+                
+                const collides = (rect) => carHitbox.x < rect.x + rect.w && carHitbox.x + carHitbox.w > rect.x && carHitbox.y < rect.y + rect.h && carHitbox.y + carHitbox.h > rect.y;
+
+                let checkpointPassed = false;
+                let passedIndex = -1;
+
+                // Check collision with the skippable checkpoint first
+                if (collides(nextCp2)) {
+                    checkpointPassed = true;
+                    passedIndex = nextCpIndex2;
+                } 
+                // Then check collision with the immediate next checkpoint
+                else if (collides(nextCp1)) {
+                    checkpointPassed = true;
+                    passedIndex = nextCpIndex1;
+                }
+
+                if (checkpointPassed) {
+                    // If we passed the finish line (checkpoint 0)
+                    if (passedIndex === 0) {
+                        const requiredProgress = Math.floor(totalCheckpoints * 0.8);
+                        // Only count the lap if at least 80% of checkpoints have been passed
+                        if (this.currentCheckpoint >= requiredProgress) {
+                            this.currentCheckpoint = 0;
+                            this.lap++;
+                            if (this.lap > TOTAL_LAPS) { endGame(); }
+                        }
+                    } else {
+                        // For all other checkpoints, update to the one we passed.
+                        this.currentCheckpoint = passedIndex;
+                    }
+                }
+            }
+            
+            handleOffTrack() { this.speed *= 0.9; }
+
+            draw(context) {
+                context.save();
+                context.translate(this.x, this.y);
+                context.rotate(this.angle);
+                context.fillStyle = CAR_COLOR;
+                context.fillRect(-this.width / 2, -this.height / 2, this.width, this.height);
+                context.fillStyle = 'black';
+                context.fillRect(-this.width/2 + 2, -this.height/2 + 5, this.width - 4, 8);
+                context.restore();
+            }
+        }
+        
+        let playerCar;
+
+        function setupInputListeners() {
+            document.addEventListener('keydown', (e) => {
+                if (!playerCar || gameState !== 'playing') return;
+                switch(e.key) {
+                    case 'w': case 'ArrowUp': playerCar.controls.forward = true; break;
+                    case 's': case 'ArrowDown': playerCar.controls.reverse = true; break;
+                    case 'a': case 'ArrowLeft': playerCar.controls.left = true; break;
+                    case 'd': case 'ArrowRight': playerCar.controls.right = true; break;
+                }
+            });
+            document.addEventListener('keyup', (e) => {
+                if (!playerCar || gameState !== 'playing') return;
+                switch(e.key) {
+                    case 'w': case 'ArrowUp': playerCar.controls.forward = false; break;
+                    case 's': case 'ArrowDown': playerCar.controls.reverse = false; break;
+                    case 'a': case 'ArrowLeft': playerCar.controls.left = false; break;
+                    case 'd': case 'ArrowRight': playerCar.controls.right = false; break;
+                }
+            });
+        }
+
+        function startGame(mapId) {
+            titleScreen.classList.add('hidden');
+            gameContainer.classList.remove('hidden');
+            resizeCanvas(); 
+            const allTracks = getTrackData(canvas.width, canvas.height);
+            currentTrack = allTracks[mapId];
+            playerCar = new Car(currentTrack.startPos.x, currentTrack.startPos.y, currentTrack.startAngle);
+            startTime = performance.now();
+            gameState = 'playing';
+            if(gameLoopId) cancelAnimationFrame(gameLoopId);
+            gameLoopId = requestAnimationFrame(gameLoop);
+        }
+        
+        function endGame() {
+            gameState = 'finished';
+            cancelAnimationFrame(gameLoopId);
+            const finalTime = ((performance.now() - startTime) / 1000).toFixed(2);
+            showMessage("Race Finished!", `Your final time is ${finalTime} seconds.`, "Play Again", () => { window.location.reload(); });
+        }
+
+        function drawTrack() {
+            if (!currentTrack) return;
+            ctx.fillStyle = GRASS_COLOR;
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            currentTrack.draw();
+            ctx.save();
+            ctx.translate(currentTrack.startPos.x, currentTrack.startPos.y);
+            ctx.rotate(currentTrack.startAngle);
+            ctx.fillStyle = START_FINISH_COLOR;
+            ctx.fillRect(-60, -5, 120, 10);
+            ctx.restore();
+        }
+
+        function drawCheckpoints() {
+            if (!playerCar || !currentTrack) return;
+            const checkpoints = currentTrack.checkpoints;
+            const totalCheckpoints = checkpoints.length;
+
+            // Draw the next checkpoint
+            const nextCpIndex1 = (playerCar.currentCheckpoint + 1) % totalCheckpoints;
+            const cp1 = checkpoints[nextCpIndex1];
+            ctx.fillStyle = CHECKPOINT_COLOR;
+            ctx.fillRect(cp1.x, cp1.y, cp1.w, cp1.h);
+            
+            // Draw the checkpoint after next
+            const nextCpIndex2 = (playerCar.currentCheckpoint + 2) % totalCheckpoints;
+            const cp2 = checkpoints[nextCpIndex2];
+            ctx.fillStyle = NEXT_CHECKPOINT_COLOR;
+            ctx.fillRect(cp2.x, cp2.y, cp2.w, cp2.h);
+        }
+
+        function gameLoop(timestamp) {
+            if (gameState !== 'playing') return;
+            playerCar.update();
+            drawTrack();
+            playerCar.checkTrackCollision(); 
+            playerCar.checkCheckpoints();
+            updateUI(timestamp);
+            drawCheckpoints();
+            playerCar.draw(ctx);
+            gameLoopId = requestAnimationFrame(gameLoop);
+        }
+
+        function updateUI(timestamp) {
+            const elapsedTime = ((timestamp - startTime) / 1000).toFixed(2);
+            timeCounterEl.textContent = elapsedTime;
+            if (playerCar.lap <= TOTAL_LAPS) {
+                lapCounterEl.textContent = `${playerCar.lap} / ${TOTAL_LAPS}`;
+            }
+            const progress = Math.floor(((playerCar.currentCheckpoint) / currentTrack.checkpoints.length) * 100);
+            progressCounterEl.textContent = `${progress}%`;
+        }
+        
+        function showMessage(title, text, buttonText, onButtonClick) {
+            messageTitle.textContent = title;
+            messageText.textContent = text;
+            messageButton.textContent = buttonText;
+            messageBox.classList.remove('hidden');
+            const newButton = messageButton.cloneNode(true);
+            messageButton.parentNode.replaceChild(newButton, messageButton);
+            messageButton = newButton;
+            messageButton.addEventListener('click', () => {
+                messageBox.classList.add('hidden');
+                if (onButtonClick) { onButtonClick(); }
+            }, { once: true });
+        }
+
+        function resizeCanvas() {
+            const container = document.body;
+            const aspectRatio = 16 / 9;
+            let newWidth = container.clientWidth;
+            let newHeight = container.clientHeight;
+            const containerAspectRatio = newWidth / newHeight;
+            if (containerAspectRatio > aspectRatio) {
+                newWidth = newHeight * aspectRatio;
+            } else {
+                newHeight = newWidth / aspectRatio;
+            }
+            canvas.width = 1280; 
+            canvas.height = 720; 
+            canvas.style.width = `${newWidth * 0.9}px`;
+            canvas.style.height = `${newHeight * 0.9}px`;
+            if (gameState === 'playing' && currentTrack) {
+                const allTracks = getTrackData(canvas.width, canvas.height);
+                for(let id in allTracks) {
+                    if(allTracks[id].name === currentTrack.name) {
+                        currentTrack = allTracks[id];
+                        break;
+                    }
+                }
+            }
+        }
+
+        window.addEventListener('resize', resizeCanvas);
+        mapButtons.forEach(button => {
+            button.addEventListener('click', () => {
+                const mapId = button.getAttribute('data-map');
+                startGame(mapId);
+            });
+        });
+
+        setupInputListeners();
+        showMessage( "Welcome to AI Racer!", "Use Arrow Keys or WASD to control your car. Pass through the yellow checkpoints to complete laps.", "Let's Race!", () => { resizeCanvas(); } );
+    </script>
+</body>
+</html>
